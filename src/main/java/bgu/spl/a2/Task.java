@@ -1,84 +1,118 @@
 package bgu.spl.a2;
 
-import java.util.NoSuchElementException;
-import java.util.concurrent.ConcurrentLinkedDeque;;
+import java.util.Collection;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * this class represents a single work stealing processor, it is
- * {@link Runnable} so it is suitable to be executed by threads.
+ * an abstract class that represents a task that may be executed using the
+ * {@link WorkStealingThreadPool}
  *
  * Note for implementors: you may add methods and synchronize any of the
  * existing methods in this class *BUT* you must be able to explain why the
- * synchronization is needed. In addition, the methods you add can only be
- * private, protected or package protected - in other words, no new public
- * methods
+ * synchronization is needed. In addition, the methods you add to this class can
+ * only be private!!!
  *
+ * @param <R>
+ *            the task result type
  */
-public class Processor implements Runnable {
+public abstract class Task<R> {
+	private Deferred<R> myDeffered = new Deferred<R>();
+	private Processor myHandler;
+	private AtomicInteger NumOfTaskToBeDone = new AtomicInteger(0);
 
-	private final WorkStealingThreadPool pool;
-	private final int id;
+	private Runnable callBack = null;
 
 	/**
-	 * constructor for this class
+	 * start handling the task - note that this method is protected, a handler
+	 * cannot call it directly but instead must use the
+	 * {@link #handle(bgu.spl.a2.Processor)} method
+	 */
+
+	protected abstract void start();
+
+	/**
 	 *
-	 * IMPORTANT: 1) this method is package protected, i.e., only classes inside
+	 * start/continue handling the task
+	 *
+	 * this method should be called by a processor in order to start this task
+	 * or continue its execution in the case where it has been already started,
+	 * any sub-tasks / child-tasks of this task should be submitted to the queue
+	 * of the handler that handles it currently
+	 *
+	 * IMPORTANT: this method is package protected, i.e., only classes inside
 	 * the same package can access it - you should *not* change it to
 	 * public/private/protected
 	 *
-	 * 2) you may not add other constructors to this class nor you allowed to
-	 * add any other parameter to this constructor - changing this may cause
-	 * automatic tests to fail..
-	 *
-	 * @param id
-	 *            - the processor id (every processor need to have its own
-	 *            unique id inside its thread pool)
-	 * @param pool
-	 *            - the thread pool which owns this processor
+	 * @param handler
+	 *            the handler that wants to handle the task
 	 */
-	/* package */ Processor(int id, WorkStealingThreadPool pool) {
-		this.id = id;
-		this.pool = pool;
+	/* package */ final void handle(Processor handler) {// take care of resuming
+														// task
+		myHandler = handler;
+		if (callBack == null)
+			this.start();
+		else
+			callBack.run();
+		
 	}
 
 	/**
-	 * meir: run all the tasks in my queue.if no tasks in my queue then i try to
-	 * steal. if i succeeded then i run again. if not able to steal then i wait
-	 * till the VM changes.
-	 * 
+	 * This method schedules a new task (a child of the current task) to the
+	 * same processor which currently handles this task.
+	 *
+	 * @param task
+	 *            the task to execute
 	 */
-	@Override
-	public void run() {
-
-		ConcurrentLinkedDeque<Task<?>> currQueue = pool.getQueueAt(id);
-		try {
-			while (!currQueue.isEmpty() && !(pool.isShutdown())) {
-				Task<?> t = ((Task<?>) currQueue.removeFirst());
-				t.handle(this);
-			}
-		} catch (NoSuchElementException e) {
-		}
-		if (!(pool.isShutdown())) {
-			int VMrightNow = pool.getVM().getVersion();
-			if (pool.steal(id))
-				run();
-			else {
-				try {
-					pool.getVM().await(VMrightNow);
-				} catch (InterruptedException e) {
-				}
-				this.run();
-
-			}
+	protected final void spawn(Task<?>... task) {
+		for (int i = 0; i < task.length; i++) {
+			myHandler.getPool().getQueueAt(myHandler.getId()).addFirst(task[i]);
 		}
 	}
 
-	protected int getId() {
-		return id;
+	/**
+	 * add a callback to be executed once *all* the given tasks results are
+	 * resolved
+	 *
+	 * Implementors note: make sure that the callback is running only once when
+	 * all the given tasks completed.
+	 *
+	 * @param tasks
+	 * @param callback
+	 *            the callback to execute once all the results are resolved
+	 */
+	protected final void whenResolved(Collection<? extends Task<?>> tasks, Runnable callback) {
+		callBack = callback;
+		NumOfTaskToBeDone.set(tasks.size());
+		Object[] arr = tasks.toArray();
+		for (int i = 0; i < arr.length; i++) {
+			((Task<?>) arr[i]).getMyDeferred().whenResolved(() -> {
+				NumOfTaskToBeDone.decrementAndGet();
+				if (NumOfTaskToBeDone.get() == 0)
+					myHandler.getPool().submit(this);
+			});
+
+		}
 	}
 
-	protected WorkStealingThreadPool getPool() {
-		return pool;
+	/**
+	 * resolve the internal result - should be called by the task derivative
+	 * once it is done.
+	 *
+	 * @param result
+	 *            - the task calculated result
+	 */
+	protected final void complete(R result) {
+		myDeffered.resolve(result);
 	}
 
+	/**
+	 * @return this task deferred result
+	 */
+	public final Deferred<R> getResult() {
+		return myDeffered;
+	}
+
+	Deferred<R> getMyDeferred() {
+		return myDeffered;
+	}
 }
