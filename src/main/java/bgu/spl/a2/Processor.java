@@ -1,5 +1,7 @@
 package bgu.spl.a2;
-import java.util.concurrent.*;
+
+import java.util.NoSuchElementException;
+import java.util.concurrent.ConcurrentLinkedDeque;;
 
 /**
  * this class represents a single work stealing processor, it is
@@ -16,7 +18,6 @@ public class Processor implements Runnable {
 
 	private final WorkStealingThreadPool pool;
 	private final int id;
-	private ConcurrentLinkedDeque<Task> myQueue=null;
 
 	/**
 	 * constructor for this class
@@ -40,12 +41,44 @@ public class Processor implements Runnable {
 		this.pool = pool;
 	}
 
+	/**
+	 * meir: run all the tasks in my queue.if no tasks in my queue then i try to
+	 * steal. if i succeeded then i run again. if not able to steal then i wait
+	 * till the VM changes.
+	 * 
+	 */
 	@Override
 	public void run() {
-		
+
+		ConcurrentLinkedDeque<Task<?>> currQueue = pool.getQueueAt(id);
+		try {
+			while (!currQueue.isEmpty() && !(pool.isShutdown())) {
+				Task<?> t = ((Task<?>) currQueue.removeFirst());
+				t.handle(this);
+			}
+		} catch (NoSuchElementException e) {
+		}
+		if (!(pool.isShutdown())) {
+			int VMrightNow = pool.getVM().getVersion();
+			if (pool.steal(id))
+				run();
+			else {
+				try {
+					pool.getVM().await(VMrightNow);
+				} catch (InterruptedException e) {
+				}
+				this.run();
+
+			}
+		}
 	}
-	ConcurrentLinkedDeque<Task> getMyQueue(){
-		return myQueue;
+
+	protected int getId() {
+		return id;
+	}
+
+	protected WorkStealingThreadPool getPool() {
+		return pool;
 	}
 
 }
