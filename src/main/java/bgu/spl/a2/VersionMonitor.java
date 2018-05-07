@@ -17,20 +17,24 @@ package bgu.spl.a2;
  * methods
  */
 public class VersionMonitor {
-private int ver;
-  VersionMonitor(){
-	 ver=0;
- }
-    public int getVersion() {
-    	return ver;
-    }
+	private int ver;
 
-    public void inc() {
-    	ver++;
-    }
+	VersionMonitor() {
+		ver = 0;
+	}
 
-    public void await(int version)  {
-    	while(ver==version){
-    	}
-    }
+	public int getVersion() {
+		return ver;
+	}
+
+	public synchronized void inc() {
+		ver++;
+		notifyAll();
+	}
+
+	public synchronized void await(int version) throws InterruptedException {
+		while (ver == version) {
+			wait();
+		}
+	}
 }
